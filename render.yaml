@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: persona-churn-lab
+    runtime: docker
+    plan: free
+    region: singapore
+    autoDeployTrigger: checksPass
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOW_DEMO_MODE
+        value: false
+      - key: OPENAI_MODEL
+        value: gpt-5.6-luna
+      - key: SESSION_SECRET
+        generateValue: true
