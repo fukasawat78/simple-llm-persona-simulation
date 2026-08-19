@@ -1,0 +1,11 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+test
+node_modules
+npm-debug.log*
+APP_README.md
+LICENSE
+README.md
