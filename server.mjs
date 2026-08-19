@@ -20,7 +20,8 @@ try {
 }
 
 const port = Number(process.env.PORT || 4173);
-const model = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const defaultModel = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const featuredModels = [...new Set(["gpt-4o-mini", "gpt-5.6-luna", defaultModel])];
 const demoAllowed = process.env.ALLOW_DEMO_MODE !== "false";
 const openAIBaseUrl = (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/$/, "");
 const sessionCookieName = "pcl_session";
@@ -278,6 +279,17 @@ function requestApiKey(req) {
   return trimmed.length >= 20 && trimmed.length <= 512 ? trimmed : "";
 }
 
+function resolveModel(value) {
+  const selected = String(value || defaultModel).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(selected)) {
+    const modelError = new Error("モデルIDの形式が正しくありません。");
+    modelError.status = 400;
+    modelError.code = "INVALID_MODEL";
+    throw modelError;
+  }
+  return selected;
+}
+
 function retryDelay(response, attempt) {
   const retryAfter = Number(response.headers.get("retry-after"));
   if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(retryAfter * 1000, 15_000);
@@ -324,11 +336,11 @@ async function openAIRequest(apiKey, path, init, maxAttempts = 3) {
   throw new Error("OpenAI API request failed");
 }
 
-async function callOpenAI(apiKey, input, format, safetyIdentifier) {
+async function callOpenAI(apiKey, selectedModel, input, format, safetyIdentifier) {
   const payload = await openAIRequest(apiKey, "/responses", {
     method: "POST",
     body: JSON.stringify({
-      model,
+      model: selectedModel,
       input,
       store: false,
       ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {}),
@@ -345,28 +357,29 @@ async function callOpenAI(apiKey, input, format, safetyIdentifier) {
 }
 
 async function evaluate(req, res) {
-  const { prompt, persona, settings, safetyIdentifier } = await readBody(req);
+  const { prompt, persona, settings, safetyIdentifier, model: requestedModel } = await readBody(req);
   if (!prompt || !persona) return json(res, 400, { error: "prompt と persona は必須です。" });
   const apiKey = requestApiKey(req);
   if (!apiKey && demoAllowed) return json(res, 200, mockDecision(persona, settings));
   if (!apiKey) return json(res, 401, { error: "このセッションで使用するOpenAI APIキーを設定してください。", code: "API_KEY_REQUIRED" });
+  const selectedModel = resolveModel(requestedModel);
 
   const personaJson = JSON.stringify(persona.fields || persona, null, 2);
   const input = prompt.includes("{{PERSONA_JSON}}")
     ? prompt.replace("{{PERSONA_JSON}}", personaJson)
     : `${prompt}\n\n# 判定対象ペルソナ\n${personaJson}`;
-  const raw = await callOpenAI(apiKey, input, {
+  const raw = await callOpenAI(apiKey, selectedModel, input, {
     type: "json_schema",
     name: "churn_decision",
     strict: true,
     schema: decisionSchema,
   }, safetyIdentifier);
   const result = JSON.parse(raw);
-  return json(res, 200, { ...result, mode: "openai" });
+  return json(res, 200, { ...result, mode: "openai", model: selectedModel });
 }
 
 async function refine(req, res) {
-  const { currentPrompt, feedback, context = "review", safetyIdentifier } = await readBody(req);
+  const { currentPrompt, feedback, context = "review", safetyIdentifier, model: requestedModel } = await readBody(req);
   if (!currentPrompt || !feedback) return json(res, 400, { error: "プロンプトとフィードバックは必須です。" });
 
   const apiKey = requestApiKey(req);
@@ -375,17 +388,20 @@ async function refine(req, res) {
     return json(res, 200, { prompt: `${currentPrompt.trim()}${marker}`, mode: "demo" });
   }
   if (!apiKey) return json(res, 401, { error: "プロンプトを改善するにはOpenAI APIキーを設定してください。", code: "API_KEY_REQUIRED" });
+  const selectedModel = resolveModel(requestedModel);
 
   const instruction = `あなたはLLM評価プロンプトの設計者です。以下のモバイル契約解約判定プロンプトを、作業者のフィードバックを反映して改善してください。元の目的、JSON出力仕様、{{PERSONA_JSON}}プレースホルダーは必ず維持してください。改善後のプロンプト本文だけを返してください。\n\n## 現在のプロンプト\n${currentPrompt}\n\n## フィードバック\n${feedback}`;
-  const prompt = await callOpenAI(apiKey, instruction, undefined, safetyIdentifier);
-  return json(res, 200, { prompt, mode: "openai" });
+  const prompt = await callOpenAI(apiKey, selectedModel, instruction, undefined, safetyIdentifier);
+  return json(res, 200, { prompt, mode: "openai", model: selectedModel });
 }
 
 async function validateKey(req, res) {
+  const { model: requestedModel } = await readBody(req);
   const apiKey = requestApiKey(req);
   if (!apiKey) return json(res, 401, { error: "有効な形式のOpenAI APIキーを入力してください。", code: "API_KEY_REQUIRED" });
-  await openAIRequest(apiKey, `/models/${encodeURIComponent(model)}`, { method: "GET", headers: {} }, 1);
-  return json(res, 200, { valid: true, model });
+  const selectedModel = resolveModel(requestedModel);
+  await openAIRequest(apiKey, `/models/${encodeURIComponent(selectedModel)}`, { method: "GET", headers: {} }, 1);
+  return json(res, 200, { valid: true, model: selectedModel });
 }
 
 function safeStaticPath(urlPath) {
@@ -424,7 +440,8 @@ const server = createServer(async (req, res) => {
         ok: true,
         apiKeyMode: "byok",
         demoAllowed,
-        model,
+        model: defaultModel,
+        models: featuredModels,
       });
     }
     if (req.method === "GET" && req.url === "/api/auth/status") {
@@ -447,7 +464,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, "0.0.0.0", () => {
   console.log(`Persona Churn Lab: http://localhost:${port}`);
-  console.log(`BYOK mode · ${model}${demoAllowed ? " · demo fallback enabled" : ""}`);
+  console.log(`BYOK mode · default ${defaultModel}${demoAllowed ? " · demo fallback enabled" : ""}`);
 });
 
 for (const signal of ["SIGTERM", "SIGINT"]) {

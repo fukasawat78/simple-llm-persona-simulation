@@ -95,6 +95,16 @@
               <h3>OpenAI APIキー</h3>
               <p>このタブのメモリ内だけで使用します。Cookie・ブラウザストレージ・サーバー・ログには保存されず、再読み込みで破棄されます。</p>
             </div>
+            <div class="model-control">
+              <label for="model-select">実行モデル</label>
+              <select id="model-select">
+                <option value="gpt-4o-mini">GPT-4o mini · 低コスト</option>
+                <option value="gpt-5.6-luna">GPT-5.6 Luna · 高効率</option>
+                <option value="__custom__">カスタムモデルID</option>
+              </select>
+              <input id="custom-model-input" class="hidden" type="text" autocomplete="off" spellcheck="false" placeholder="例: gpt-4o" maxlength="128" />
+              <small>判定とプロンプト改善の両方に適用します</small>
+            </div>
             <div class="key-control">
               <label for="api-key-input">このセッションで使用するキー</label>
               <div class="key-input-row">

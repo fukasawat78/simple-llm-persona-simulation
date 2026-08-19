@@ -56,7 +56,7 @@ test.before(async () => {
 
     if (req.url?.startsWith("/v1/models/")) {
       res.writeHead(200, { "content-type": "application/json" });
-      return res.end(JSON.stringify({ id: "gpt-5.6-luna", object: "model" }));
+      return res.end(JSON.stringify({ id: decodeURIComponent(req.url.split("/").at(-1)), object: "model" }));
     }
 
     const structured = body?.text?.format?.name === "churn_decision";
@@ -103,6 +103,8 @@ test("health endpoint describes BYOK mode and sends security headers", async () 
   assert.equal(response.status, 200);
   assert.equal(payload.apiKeyMode, "byok");
   assert.equal(payload.demoAllowed, false);
+  assert.equal(payload.model, "gpt-5.6-luna");
+  assert.ok(payload.models.includes("gpt-4o-mini"));
   assert.match(response.headers.get("content-security-policy"), /script-src 'self'/);
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
 });
@@ -155,11 +157,24 @@ test("key validation forwards the key for only that request", async () => {
   const response = await fetch(`${appBaseUrl}/api/key/validate`, {
     method: "POST",
     headers: authenticatedHeaders({ "content-type": "application/json", "x-openai-api-key": testApiKey }),
-    body: "{}",
+    body: JSON.stringify({ model: "gpt-4o-mini" }),
   });
   assert.equal(response.status, 200);
   assert.equal(calls.at(-1).authorization, `Bearer ${testApiKey}`);
-  assert.match(calls.at(-1).url, /\/v1\/models\/gpt-5.6-luna/);
+  assert.match(calls.at(-1).url, /\/v1\/models\/gpt-4o-mini/);
+});
+
+test("model IDs are validated before calling OpenAI", async () => {
+  const before = calls.length;
+  const response = await fetch(`${appBaseUrl}/api/key/validate`, {
+    method: "POST",
+    headers: authenticatedHeaders({ "content-type": "application/json", "x-openai-api-key": testApiKey }),
+    body: JSON.stringify({ model: "../../invalid model" }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 400);
+  assert.equal(payload.code, "INVALID_MODEL");
+  assert.equal(calls.length, before);
 });
 
 test("evaluation uses structured output and disables response storage", async () => {
@@ -171,6 +186,7 @@ test("evaluation uses structured output and disables response storage", async ()
       persona: { id: "1", fields: { "一文まとめ": "長期利用者" } },
       settings: { months: 6 },
       safetyIdentifier: "persona-sim-test-user",
+      model: "gpt-4o-mini",
     }),
   });
   const payload = await response.json();
@@ -181,6 +197,7 @@ test("evaluation uses structured output and disables response storage", async ()
   assert.equal(call.authorization, `Bearer ${testApiKey}`);
   assert.equal(call.body.store, false);
   assert.equal(call.body.safety_identifier, "persona-sim-test-user");
+  assert.equal(call.body.model, "gpt-4o-mini");
   assert.equal(call.body.text.format.name, "churn_decision");
 });
 
@@ -188,11 +205,13 @@ test("prompt refinement also uses the transient request key", async () => {
   const response = await fetch(`${appBaseUrl}/api/refine`, {
     method: "POST",
     headers: authenticatedHeaders({ "content-type": "application/json", "x-openai-api-key": testApiKey }),
-    body: JSON.stringify({ currentPrompt: "base {{PERSONA_JSON}}", feedback: "継続要因を重視", context: "review" }),
+    body: JSON.stringify({ currentPrompt: "base {{PERSONA_JSON}}", feedback: "継続要因を重視", context: "review", model: "gpt-4o-mini" }),
   });
   const payload = await response.json();
   assert.equal(response.status, 200);
   assert.equal(payload.mode, "openai");
   assert.match(payload.prompt, /改善済み/);
+  assert.equal(payload.model, "gpt-4o-mini");
   assert.equal(calls.at(-1).authorization, `Bearer ${testApiKey}`);
+  assert.equal(calls.at(-1).body.model, "gpt-4o-mini");
 });

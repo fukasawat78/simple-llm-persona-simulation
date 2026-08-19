@@ -49,13 +49,15 @@ npm start
 サーバー側の設定例：
 
 ```dotenv
-OPENAI_MODEL=gpt-5.6-luna
+OPENAI_MODEL=gpt-4o-mini
 PORT=4173
 ALLOW_DEMO_MODE=true
 SESSION_SECRET=replace-with-at-least-32-random-bytes
 ```
 
 ローカルでは`ALLOW_DEMO_MODE=true`により、キーなしで決定的なデモ判定も利用できます。実キー利用時はResponses APIのJSON Schema構造化出力を使用し、API側のレスポンス保存を`store: false`にしています。
+
+セットアップ画面で実行モデルを選択できます。初期値は低コストな`gpt-4o-mini`で、`gpt-5.6-luna`または任意のカスタムモデルIDにも切り替えられます。選択したモデルは判定とプロンプト改善の両方へ適用されます。カスタムモデルはResponses APIとStructured Outputsに対応するモデルを指定してください。
 
 ## ワークフロー
 

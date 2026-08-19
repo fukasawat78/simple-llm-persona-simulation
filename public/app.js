@@ -36,7 +36,7 @@ const state = {
   running: false,
   cancelled: false,
   stopReason: "",
-  api: { apiKeyMode: "byok", demoAllowed: false, model: "" },
+  api: { apiKeyMode: "byok", demoAllowed: false, model: "gpt-4o-mini", models: [] },
 };
 
 let sessionApiKey = "";
@@ -358,6 +358,64 @@ function updateKeyUI(status = "empty", message = "APIキーは未設定です") 
   $("#run-mode").textContent = status === "connected" ? `OPENAI · ${state.api.model}` : state.api.demoAllowed ? "DEMO MODE" : "API KEY REQUIRED";
 }
 
+function selectedModel() {
+  const value = $("#model-select").value === "__custom__" ? $("#custom-model-input").value.trim() : $("#model-select").value;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) throw new Error("有効なモデルIDを入力してください。");
+  return value;
+}
+
+function setModelControl(model) {
+  const select = $("#model-select");
+  const known = [...select.options].some((option) => option.value === model);
+  select.value = known ? model : "__custom__";
+  $("#custom-model-input").classList.toggle("hidden", known);
+  if (!known) $("#custom-model-input").value = model;
+}
+
+async function handleModelChange() {
+  const custom = $("#model-select").value === "__custom__";
+  $("#custom-model-input").classList.toggle("hidden", !custom);
+  if (custom && !$("#custom-model-input").value.trim()) {
+    updateKeyUI("empty", "カスタムモデルIDを入力してください");
+    $("#custom-model-input").focus();
+    return;
+  }
+  if (state.running) {
+    setModelControl(state.api.model);
+    return showToast("実行中はモデルを変更できません。", true);
+  }
+
+  let model;
+  try {
+    model = selectedModel();
+  } catch (error) {
+    return updateKeyUI("error", error.message);
+  }
+
+  if (!sessionApiKey) {
+    state.api.model = model;
+    updateKeyUI("empty", `${model}を選択 · APIキーは未設定です`);
+    return;
+  }
+
+  const previousModel = state.api.model;
+  updateKeyUI("empty", `${model}への接続を確認中...`);
+  try {
+    const result = await fetchJson("/api/key/validate", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+      useApiKey: true,
+    });
+    state.api.model = result.model;
+    updateKeyUI("connected", `${result.model}へ接続済み · 再読み込みで破棄`);
+    $("#api-status").textContent = `OpenAI · ${result.model}`;
+    showToast(`実行モデルを${result.model}へ変更しました`);
+  } catch (error) {
+    setModelControl(previousModel);
+    updateKeyUI("connected", `${previousModel}へ接続済み · モデル変更失敗: ${error.message}`);
+  }
+}
+
 async function connectKey() {
   const input = $("#api-key-input");
   const candidate = input.value.trim();
@@ -366,13 +424,15 @@ async function connectKey() {
   button.disabled = true;
   button.textContent = "確認中...";
   try {
+    const model = selectedModel();
     const result = await fetchJson("/api/key/validate", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ model }),
       useApiKey: true,
       apiKey: candidate,
     });
     sessionApiKey = candidate;
+    state.api.model = result.model;
     input.value = "";
     updateKeyUI("connected", `${result.model}へ接続済み · 再読み込みで破棄`);
     $("#api-status").textContent = `OpenAI · ${result.model}`;
@@ -463,7 +523,7 @@ async function startRun() {
     try {
       const decision = await fetchJson("/api/evaluate", {
         method: "POST",
-        body: JSON.stringify({ prompt: state.prompt, persona, settings: options, safetyIdentifier }),
+        body: JSON.stringify({ prompt: state.prompt, persona, settings: options, safetyIdentifier, model: state.api.model }),
         useApiKey: Boolean(sessionApiKey),
       });
       result = { ...decision, id: persona.id, row: persona.row, persona };
@@ -548,7 +608,7 @@ async function applyFeedback(source) {
   try {
     const payload = await fetchJson("/api/refine", {
       method: "POST",
-      body: JSON.stringify({ currentPrompt: state.prompt, feedback, context: source, safetyIdentifier }),
+      body: JSON.stringify({ currentPrompt: state.prompt, feedback, context: source, safetyIdentifier, model: state.api.model }),
       useApiKey: Boolean(sessionApiKey),
     });
     state.prompt = payload.prompt;
@@ -643,6 +703,7 @@ function resetApp() {
 async function checkAPI() {
   try {
     state.api = await fetchJson("/api/health", { method: "GET" });
+    setModelControl(state.api.model);
     $("#api-dot").classList.add("active");
     $("#api-status").textContent = state.api.demoAllowed ? "Server connected · demo available" : "Server connected · key required";
     updateKeyUI("empty", state.api.demoAllowed ? "APIキー未設定 · デモ判定を利用できます" : "APIキーは未設定です");
@@ -655,6 +716,9 @@ function bindEvents() {
   $("#login-form").addEventListener("submit", login);
   $("#logout-btn").addEventListener("click", logout);
   $("#connect-key-btn").addEventListener("click", connectKey);
+  $("#model-select").addEventListener("change", handleModelChange);
+  $("#custom-model-input").addEventListener("change", handleModelChange);
+  $("#custom-model-input").addEventListener("keydown", (event) => { if (event.key === "Enter") handleModelChange(); });
   $("#api-key-input").addEventListener("keydown", (event) => { if (event.key === "Enter") connectKey(); });
   $("#toggle-key-btn").addEventListener("click", () => {
     const input = $("#api-key-input");

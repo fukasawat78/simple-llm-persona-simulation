@@ -12,6 +12,6 @@ services:
       - key: ALLOW_DEMO_MODE
         value: false
       - key: OPENAI_MODEL
-        value: gpt-5.6-luna
+        value: gpt-4o-mini
       - key: SESSION_SECRET
         generateValue: true
